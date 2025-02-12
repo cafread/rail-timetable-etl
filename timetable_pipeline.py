@@ -63,8 +63,7 @@ def parse_locations(mca_file):
                 atoc_code = line[53:56].strip()
                 station_name = line[18:44].strip()
                 
-                if atoc_code:
-                    locations.append((tiploc, atoc_code, station_name))
+                locations.append((tiploc, atoc_code, station_name))
     
     return locations
 
