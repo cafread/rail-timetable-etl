@@ -258,7 +258,7 @@ WITH params AS ( -- Sample illustrating usage
     WHERE train_score > 0
 )
 SELECT FIRST 200
-    targs.train_id
+    targs.train_id,
     targs.train_score,
     trn.toc_code,
     IFNULL(toc.toc_name, 'Unknown') AS "toc",
