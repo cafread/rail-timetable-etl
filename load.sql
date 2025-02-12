@@ -184,102 +184,78 @@ INSERT INTO uk_rail_tocs VALUES
 ('XC', 'CrossCountry'),
 ('XR', 'Elizabeth line')
 ;
-WITH params AS ( -- Sample illustrating usage
+-- Sample illustrating usage
+SELECT * FROM uk_rail_locations WHERE station_name LIKE '%Manchester%' WITHOUT CASE
+;
+WITH params AS (
     SELECT
-        TIME('19:15') AS "dep_time",
-        TIME(NULL) AS "arr_time",
-        VARCHAR('GLYNDE') AS "orig",
-        VARCHAR('BRGHTN') AS "dest",
-        DATE(NULL) AS "trv_date"
-)
-, score AS (
-    SELECT
-        trn.train_id,
-        MAX(
-            5 * GREATEST(0, CASE                -- Up to 25 points for departing target origin at target dep time
-                WHEN params.dep_time IS NULL THEN 0
-                WHEN stp.sched_dep   IS NULL THEN 0
-                WHEN params.orig IS NOT NULL AND params.orig != stp.tiploc AND params.orig != stn.station_name THEN 0
-                ELSE 5 - ABS(LEAST(
-                    TIMESTAMPDIFF(MINUTES, GREATEST(params.dep_time, stp.sched_dep), LEAST(params.dep_time, stp.sched_dep)),
-                    TIMESTAMPDIFF(MINUTES, LEAST(params.dep_time, stp.sched_dep), GREATEST(params.dep_time, stp.sched_dep)) + 1440
-                    ))                          -- Three points if the period in question is covered
-                    + IF(IFNULL(params.trv_date, CURRENT_DATE) BETWEEN trn.start_date AND trn.end_date, 3, 0)
-                END
-            ) +
-            5 * GREATEST(0, CASE                -- Up to 25 points for arriving at target destination at target arr time
-                WHEN params.arr_time IS NULL THEN 0
-                WHEN stp.sched_arr   IS NULL THEN 0
-                WHEN params.dest IS NOT NULL AND params.dest != stp.tiploc AND params.dest != stn.station_name THEN 0
-                ELSE 5 - ABS(LEAST(
-                    TIMESTAMPDIFF(MINUTES, GREATEST(params.arr_time, stp.sched_arr), LEAST(params.arr_time, stp.sched_arr)),
-                    TIMESTAMPDIFF(MINUTES, LEAST(params.arr_time, stp.sched_arr), GREATEST(params.arr_time, stp.sched_arr)) + 1440
-                    ))                          -- Three points if the period in question is covered
-                    + IF(IFNULL(params.trv_date, CURRENT_DATE) BETWEEN trn.start_date AND trn.end_date, 3, 0)
-                END
-            )
-         ) AS "train_score"
-    FROM uk_rail_trains AS trn
-    CROSS JOIN params
-    JOIN uk_rail_stops AS stp ON stp.train_id = trn.train_id
-    JOIN uk_rail_locations AS stn ON stn.tiploc = stp.tiploc
-    WHERE CASE -- Require it operates on the specified date
-        WHEN params.trv_date IS NULL THEN 1
-        WHEN DOW(params.trv_date) = 'Mon' THEN trn.mon
-        WHEN DOW(params.trv_date) = 'Tue' THEN trn.tue
-        WHEN DOW(params.trv_date) = 'Wed' THEN trn.wed
-        WHEN DOW(params.trv_date) = 'Thu' THEN trn.thu
-        WHEN DOW(params.trv_date) = 'Fri' THEN trn.fri
-        WHEN DOW(params.trv_date) = 'Sat' THEN trn.sat
-        WHEN DOW(params.trv_date) = 'Sun' THEN trn.sun
-        ELSE 0 END = 1
-    AND CASE
-        WHEN params.dep_time IS NULL THEN 1
-        WHEN ABS(stp.sched_dep - params.dep_time) < 3 THEN 1
-        ELSE 0 END = 1
-    AND CASE
-        WHEN params.arr_time IS NULL THEN 1
-        WHEN ABS(stp.sched_arr - params.arr_time) < 3 THEN 1
-        ELSE 0 END = 1
-    AND EXISTS ( -- Require that origin or destination is on this train route
-        SELECT 1
-        FROM uk_rail_stops AS spec
-        WHERE spec.train_id = trn.train_id
-        AND spec.tiploc IN (params.orig, params.dest)
-    )
-    GROUP BY 1
+        TIME('08:40:00') AS "dep_time",
+        TIME('09:41:00') AS "arr_time",
+        VARCHAR('SWNSCMB') AS "orig",
+        VARCHAR(NULL) AS "dest",
+        DATE(NULL) AS "trv_date",
+        2 AS "tolerance"
 )
 , targs AS (
-    SELECT
-        train_id,
-        train_score,
-        DENSE_RANK() OVER (ORDER BY train_score DESC) AS "rnk"
-    FROM score
-    WHERE train_score > 0
+    SELECT DISTINCT train.train_id
+    FROM uk_rail_trains AS train
+    JOIN uk_rail_stops AS orig ON orig.train_id = train.train_id
+    JOIN params
+        ON  params.orig = orig.tiploc
+        AND ABS(LEAST(
+                TIMESTAMPDIFF(MINUTES, GREATEST(params.dep_time, orig.sched_dep), LEAST(params.dep_time, orig.sched_dep)),
+                TIMESTAMPDIFF(MINUTES, LEAST(params.dep_time, orig.sched_dep), GREATEST(params.dep_time, orig.sched_dep)) + 1440
+            )) <= params.tolerance
+    WHERE EXISTS (
+        SELECT 1
+        FROM uk_rail_stops AS dest
+        WHERE dest.train_id = train.train_id
+        AND ABS(LEAST(
+                TIMESTAMPDIFF(MINUTES, GREATEST(params.arr_time, dest.sched_dep), LEAST(params.arr_time, dest.sched_dep)),
+                TIMESTAMPDIFF(MINUTES, LEAST(params.arr_time, dest.sched_dep), GREATEST(params.arr_time, dest.sched_dep)) + 1440
+            )) <= params.tolerance
+    )
+    AND CASE -- Require it operates on the specified date
+        WHEN params.trv_date IS NULL THEN 1
+        WHEN DOW(params.trv_date) = 'Mon' THEN train.mon
+        WHEN DOW(params.trv_date) = 'Tue' THEN train.tue
+        WHEN DOW(params.trv_date) = 'Wed' THEN train.wed
+        WHEN DOW(params.trv_date) = 'Thu' THEN train.thu
+        WHEN DOW(params.trv_date) = 'Fri' THEN train.fri
+        WHEN DOW(params.trv_date) = 'Sat' THEN train.sat
+        WHEN DOW(params.trv_date) = 'Sun' THEN train.sun
+        ELSE 0 END = 1
 )
-SELECT FIRST 200
-    targs.train_id,
-    targs.train_score,
-    trn.toc_code,
-    IFNULL(toc.toc_name, 'Unknown') AS "toc",
-    trn.uid,
-    stp.line_num,
-    CASE
-        WHEN params.orig IS NULL      THEN ''
-        WHEN params.orig = stp.tiploc THEN 'O'
-        WHEN params.dest = stp.tiploc THEN 'D'
-        ELSE '' END AS "relevance",
-    stn.atoc_code,
-    stn.station_name,
-    stp.sched_arr,
-    stp.sched_dep,
-    trn.start_date,
-    trn.end_date
-FROM targs
-CROSS JOIN params
-JOIN uk_rail_trains AS trn ON trn.train_id = targs.train_id
-JOIN uk_rail_stops AS stp ON stp.train_id = trn.train_id
-JOIN uk_rail_locations AS stn ON stn.tiploc = stp.tiploc
-LEFT JOIN uk_rail_tocs AS toc ON toc.toc_code = trn.toc_code
-WHERE targs.rnk = 1
-ORDER BY targs.train_score DESC, targs.train_id ASC, stp.line_num ASC
+, results AS (
+    SELECT
+        targs.train_id,
+        trn.toc_code,
+        IFNULL(toc.toc_name, 'Unknown') AS "toc",
+        trn.uid,
+        stp.line_num,
+        CASE
+            WHEN params.orig IS NULL      THEN ''
+            WHEN params.orig = stp.tiploc THEN 'O'
+            WHEN params.dest = stp.tiploc THEN 'D'
+            WHEN ABS(LEAST(
+                    TIMESTAMPDIFF(MINUTES, GREATEST(params.arr_time, stp.sched_arr), LEAST(params.arr_time, stp.sched_arr)),
+                    TIMESTAMPDIFF(MINUTES, LEAST(params.arr_time, stp.sched_arr), GREATEST(params.arr_time, stp.sched_arr)) + 1440
+                )) <= params.tolerance THEN 'D?'
+            ELSE '' END AS "relevance",
+        stn.atoc_code,
+        stn.station_name,
+        stp.sched_arr,
+        stp.sched_dep,
+        trn.start_date,
+        trn.end_date
+    FROM targs
+    CROSS JOIN params
+    JOIN uk_rail_trains AS trn ON trn.train_id = targs.train_id
+    JOIN uk_rail_stops AS stp ON stp.train_id = trn.train_id
+    JOIN uk_rail_locations AS stn ON stn.tiploc = stp.tiploc
+    LEFT JOIN uk_rail_tocs AS toc ON toc.toc_code = trn.toc_code
+)
+SELECT *
+FROM results
+WHERE relevance != ''
+ORDER BY train_id, line_num
